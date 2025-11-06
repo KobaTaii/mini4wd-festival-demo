@@ -31,7 +31,9 @@ boolean is_duty_high = false; // 現在のdutyの状態 (false=30%, true=100%)
 
 boolean is_running = false; // 走行中フラグ
 
-Textfield interval_field; // interval_time入力用
+String current_mode = "INTERVAL"; // 現在の動作モード
+
+ControlP5 cp5; // グローバル変数に変更
 //----------
 
 /**
@@ -52,10 +54,10 @@ void setup()
   PFont pfont = createFont("Arial", 20, true); 
   ControlFont font = new ControlFont(pfont, 241);
   textSize(20);
-  size(500, 220);
+  size(500, 300);
 
-//ボタン等のUIを使用するためのクラス
-  ControlP5 cp5 = new ControlP5(this);
+  //ボタン等のUIを使用するためのクラス
+  cp5 = new ControlP5(this); // グローバル変数を初期化
   comp  = new ComPortConnection(20, 20, "COM7", cp5);  
   
 //STARTボタン
@@ -70,6 +72,7 @@ void setup()
         .setFont(font)
           .toUpperCase(false)
             .setSize(24)
+            .setVisible(true) // ★デフォルトで表示
               ;
               
   //STOPボタン
@@ -80,6 +83,20 @@ void setup()
           .setColorBackground(0xff660000) // OFFの色
             ;
    cp5.getController("STOP")
+      .getCaptionLabel()
+        .setFont(font)
+          .toUpperCase(false)
+            .setSize(24)
+            .setVisible(true) // ★デフォルトで表示
+              ;
+              
+   //MODE CHANGEボタン
+   cp5.addButton("MODE_CHANGE")
+        .setPosition(20, 200)
+          .setSize(450, 40)
+          .setCaptionLabel("Change to MANUAL Mode")
+            ;
+   cp5.getController("MODE_CHANGE")
       .getCaptionLabel()
         .setFont(font)
           .toUpperCase(false)
@@ -121,6 +138,16 @@ void draw()
     port.write(command0(current_duty_ratio)); // モーターduty設定
     port.write(command1(0)); // 右LEDは消灯
     port.write(command2(0)); // 左LEDは消灯
+  }
+  
+  // 現在のモードと操作方法の表示
+  fill(255);
+  textSize(20);
+  text("Mode: " + current_mode, 20, 270);
+  
+  if (current_mode.equals("MANUAL")) {
+    textSize(16);
+    text("Keys: [W] 100%  [S] 30%  [Space] Stop", 20, 290);
   }
 }  
 
@@ -181,32 +208,97 @@ public void controlEvent(ControlEvent theEvent) {
   //STARTボタンを押したときの処理
   if (theEvent.getController().getName() == "START" )
   {
-    if (port != null && !is_running) { // 接続中かつ停止中のみ
-      println("走行開始");
-      is_running = true;
-      is_duty_high = false; // 30%からスタート
-      last_toggle_time = millis(); // タイマーリセット
-      
-      // 最初のコマンド（30%）を送信
-      port.write(command0(0.3)); 
-      port.write(command1(0));
-      port.write(command2(0));
+    // インターバルモード中のみ有効
+    if (current_mode.equals("INTERVAL")) {
+      if (port != null && !is_running) { // 接続中かつ停止中のみ
+        println("走行開始 (インターバルモード)");
+        is_running = true; 
+        is_duty_high = false; 
+        last_toggle_time = millis(); 
+        
+        port.write(command0(0.3)); 
+        port.write(command1(0));
+        port.write(command2(0));
+      }
     }
   }
   
   //STOPボタンを押したときの処理
   if (theEvent.getController().getName() == "STOP" )
   {
-    if (port != null && is_running) { // 接続中かつ走行中のみ
-      println("走行停止");
-      is_running = false;
-      
-      // 停止コマンド（0%）を送信
-      port.write(command0(0.0));
-      port.write(command1(0));
-      port.write(command2(0));
+    // インターバルモード中のみ有効
+    if (current_mode.equals("INTERVAL")) {
+      if (port != null && is_running) { // 接続中かつ走行中のみ
+        println("走行停止 (インターバルモード)");
+        is_running = false; 
+        
+        port.write(command0(0.0));
+        port.write(command1(0));
+        port.write(command2(0));
+      }
     }
   }
-
   
+  //MODE_CHANGEボタンを押したときの処理
+  if (theEvent.getController().getName() == "MODE_CHANGE" )
+  {
+    // モーターを停止
+    if (port != null) {
+      port.write(command0(0.0));
+    }
+    
+    // モードを切り替え
+    if (current_mode.equals("INTERVAL")) {
+      current_mode = "MANUAL";
+      if (is_running) {
+        is_running = false;
+      }
+      println("マニュアルモードへ変更");
+      theEvent.getController().setCaptionLabel("Change to INTERVAL Mode");
+      
+      // START/STOPボタンを非表示
+      cp5.getController("START").setVisible(false);
+      cp5.getController("STOP").setVisible(false);
+      
+    } else { // MANUAL の場合
+      current_mode = "INTERVAL";
+      println("インターバルモードへ変更");
+      theEvent.getController().setCaptionLabel("Change to MANUAL Mode");
+      
+      // START/STOPボタンを表示
+      cp5.getController("START").setVisible(true);
+      cp5.getController("STOP").setVisible(true);
+    }
+  }
+  
+}
+
+//キーボードが押されたときに呼ばれる (マニュアルモード)
+void keyPressed() {
+  
+  // 接続されていないか、マニュアルモードでない場合は何もしない
+  if (port == null || !current_mode.equals("MANUAL")) {
+    return;
+  }
+  
+  // テキストフィールドがフォーカスされている場合はキー操作を無効にする
+  if (comp.tf.isFocus()) {
+    return;
+  }
+
+  // 'w'キー: Duty 100%
+  if (key == 'w' || key == 'W') {
+    println("マニュアル: 100%");
+    port.write(command0(1.0));
+  } 
+  // 's'キー: Duty 30%
+  else if (key == 's' || key == 'S') {
+    println("マニュアル: 30%");
+    port.write(command0(0.3));
+  } 
+  // スペースキー: 停止
+  else if (key == ' ') {
+    println("マニュアル: 停止");
+    port.write(command0(0.0));
+  }
 }
